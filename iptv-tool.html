@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>IPTV节目列表正则处理工具 — 转 M3U</title>
+  <title>IPTV节目列表 → M3U 格式转换工具</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     body { font-family: Arial, "Helvetica Neue", Helvetica, sans-serif; max-width: 1100px; margin: 22px auto; padding: 0 18px; color: #222; }
@@ -44,6 +44,7 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
   <div class="container row">
     <button id="processBtn">执行转换</button>
     <button id="copyBtn" class="ghost">复制结果</button>
+    <button id="downloadBtn" class="ghost">下载 M3U</button>
     <button id="clearBtn" class="ghost">清空并重置</button>
     <button id="exampleBtn" class="ghost">插入示例</button>
   </div>
@@ -54,7 +55,7 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
     <small class="hint">如果转换未匹配到任何条目，工具会提示并允许将原文以注释形式输出。</small>
   </div>
 
-  <footer> https://t.me/fuchenyouzaibot 悠哉TG @fuchenyouzaibot</footer>
+  <footer>悠哉正则整理纯前端js <strong>Tg@fuchenyouzaibot.m3u</strong> https://t.me/fuchenyouzaibot </footer>
 
   <script>
   (function(){
@@ -64,10 +65,12 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
     const resultText = document.getElementById('resultText');
     const processBtn = document.getElementById('processBtn');
     const copyBtn = document.getElementById('copyBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
     const clearBtn = document.getElementById('clearBtn');
     const exampleBtn = document.getElementById('exampleBtn');
 
     const DEFAULT_PROXY = '192.168.1.100:4022';
+    const DOWNLOAD_FILENAME = 'tg@fuchenyouzaibot.m3u'; // <-- 文件名按用户要求
 
     // 将一行解析成键值对象：匹配 key="value" 的所有项
     function parseLineToKV(line) {
@@ -84,33 +87,19 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
 
     // 生成最终代理化/原样 URL
     function makeProxiedUrl(rawUrl, proxyHostPort) {
-      // rawUrl 可能像 "udp://239.1.1.1:1234" 或 "http://..." 或 "rtsp://..."
-      try {
-        // 尝试用 URL 解析（对非 http(s) 也能得到 protocol + rest）
-        // 为了兼容 rtsp/udp 等，先用 regex 如果 URL 构造失败
-        const protoMatch = rawUrl.match(/^([^:]+):\/\/(.+)$/);
-        if (!protoMatch) {
-          // 无协议 -> 直接返回原串
-          return rawUrl;
-        }
-        const proto = protoMatch[1].toLowerCase();
-        const rest = protoMatch[2];
+      const protoMatch = rawUrl.match(/^([^:]+):\/\/(.+)$/);
+      if (!protoMatch) return rawUrl;
+      const proto = protoMatch[1].toLowerCase();
+      const rest = protoMatch[2];
 
-        if (proto === 'udp') {
-          // udpxy 常见路径： http://<proxy>/udp/<multicast-ip>:<port>
-          return `http://${proxyHostPort}/udp/${rest}`;
-        } else if (proto === 'rtsp') {
-          // rtsp 可能需要代理或特殊处理，默认走 proxy 下的 rtsp 路径（请根据你的代理调整）
-          return `http://${proxyHostPort}/rtsp/${rest}`;
-        } else if (proto === 'http' || proto === 'https') {
-          // http/https 保持原样（通常不需要通过 udpxy）
-          return rawUrl;
-        } else {
-          // 其它协议保守处理：放到 proxy 的通用路径下
-          return `http://${proxyHostPort}/${proto}/${rest}`;
-        }
-      } catch (e) {
+      if (proto === 'udp') {
+        return `http://${proxyHostPort}/udp/${rest}`;
+      } else if (proto === 'rtsp') {
+        return `http://${proxyHostPort}/rtsp/${rest}`;
+      } else if (proto === 'http' || proto === 'https') {
         return rawUrl;
+      } else {
+        return `http://${proxyHostPort}/${proto}/${rest}`;
       }
     }
 
@@ -123,32 +112,26 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
       for (const line of lines) {
         const kv = parseLineToKV(line);
 
-        // 容错：尝试兼容历史可能的命名（如 xxxChannelName）
+        // 兼容多种可能的 key 名
         const channelName = kv.ChannelName || kv.ChannelNAme || kv.channelName || kv.Channel || kv.xxxChannelName || '';
         const userId = kv.UserChannelID || kv.userChannelID || kv.UserChannel || kv.ChannelID || '';
         let channelUrl = kv.ChannelURL || kv.ChannelUrl || kv.channelURL || kv.URL || '';
 
-        // 有些行可能把 URL 放在其它字段或后缀中，尝试粗略抽取 "proto://rest" 的部分
         if (!channelUrl) {
           const urlMatch = line.match(/([a-zA-Z0-9]+):\/\/[^\s,"]+/);
           if (urlMatch) channelUrl = urlMatch[0];
         }
 
-        if (!channelUrl) {
-          // 无法找到 URL，跳过
-          continue;
-        }
+        if (!channelUrl) continue;
+
         if (!channelName) {
-          // 若缺少频道名，用 URL 作为名称备选（去掉协议）
           const fallbackName = channelUrl.replace(/^[a-zA-Z0-9]+:\/\//, '');
-          // 取到第一段作为名（避免过长）
           kv._fallbackName = fallbackName.split(/[\/:\?]/)[0] || fallbackName;
         }
 
         const finalName = channelName || kv._fallbackName || 'UnnamedChannel';
         const proxied = makeProxiedUrl(channelUrl, proxy);
 
-        // 输出带 tvg-id 的 EXTINF（若有 UserChannelID）
         if (userId) {
           outEntries.push(`#EXTINF:-1 tvg-id="${userId}" tvg-name="${finalName}",${finalName}`);
         } else {
@@ -161,7 +144,7 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
       return { processedCount, m3u: '#EXTM3U\n' + outEntries.join('\n') + (outEntries.length ? '\n' : '') };
     }
 
-    // 按钮事件
+    // 按钮事件：执行转换
     processBtn.addEventListener('click', () => {
       const source = sourceText.value.trim();
       const proxy = (proxyAddr.value.trim() || DEFAULT_PROXY).trim();
@@ -187,7 +170,7 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
       alert(`转换完成：共处理 ${res.processedCount} 个条目。`);
     });
 
-    // 复制（优先 navigator.clipboard，次级回退 execCommand）
+    // 复制（优先 navigator.clipboard）
     copyBtn.addEventListener('click', async () => {
       const text = resultText.value;
       if (!text) { alert('暂无转换结果可复制！'); return; }
@@ -218,6 +201,28 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
       }
     });
 
+    // 下载功能：生成并触发 download
+    downloadBtn.addEventListener('click', () => {
+      const text = resultText.value;
+      if (!text) { alert('暂无转换结果可下载！'); return; }
+
+      try {
+        const blob = new Blob([text], { type: 'audio/x-mpegurl;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = DOWNLOAD_FILENAME;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // 释放对象 URL
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        alert(`已开始下载：${DOWNLOAD_FILENAME}`);
+      } catch (e) {
+        alert('下载失败，请手动复制内容并保存为文件。');
+      }
+    });
+
     // 清空重置
     clearBtn.addEventListener('click', () => {
       if (!confirm('确定要清空并重置为默认代理吗？')) return;
@@ -238,7 +243,6 @@ ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="30
       alert('示例已插入，点击 "执行转换" 查看效果。');
     });
 
-    // 页面加载时可选地填入示例（不自动插入）
   })();
   </script>
 </body>
