@@ -1,112 +1,245 @@
-<script>
-  // 元素缓存
-  const sourceText = document.getElementById('sourceText');
-  const proxyAddr = document.getElementById('proxyAddr');
-  const resultText = document.getElementById('resultText');
-  const processBtn = document.getElementById('processBtn');
-  const copyBtn = document.getElementById('copyBtn');
-  const clearBtn = document.getElementById('clearBtn');
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>IPTV节目列表正则处理工具 — 转 M3U</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body { font-family: Arial, "Helvetica Neue", Helvetica, sans-serif; max-width: 1100px; margin: 22px auto; padding: 0 18px; color: #222; }
+    h1 { margin: 6px 0 14px 0; font-weight: 700; color: #0b6; }
+    .container { margin-bottom: 18px; }
+    label { display:block; margin-bottom:8px; font-weight:600; }
+    textarea { width:100%; min-height:180px; padding:10px; border:1px solid #ddd; border-radius:6px; box-sizing:border-box; resize:vertical; font-family: monospace; }
+    input[type="text"] { padding:8px 10px; border-radius:6px; border:1px solid #ddd; width:320px; box-sizing:border-box; }
+    button { padding:8px 14px; border-radius:6px; border:none; cursor:pointer; background:#0a7; color:#fff; margin-right:8px; font-weight:600; }
+    button.ghost { background:#f3f3f3; color:#222; border:1px solid #ddd; }
+    small.hint { color:#666; display:block; margin-top:6px; }
+    #resultText[readonly] { background:#fafafa; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .meta { font-size:13px; color:#666; margin-top:8px; }
+    footer { margin-top:26px; color:#666; font-size:13px; text-align:center; }
+    @media (max-width:600px) {
+      input[type="text"]{ width:100%; }
+      .row { flex-direction:column; align-items:flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <h1>IPTV节目列表 → M3U 格式转换工具</h1>
 
-  // 默认 proxy（可修改）
-  const DEFAULT_PROXY = '192.168.1.100:4022';
+  <div class="container">
+    <label for="sourceText">1. 粘贴原始 IPTV 节目列表（每行一个条目，支持任意字段顺序）：</label>
+    <textarea id="sourceText" placeholder='示例：ChannelName="CCTV1",UserChannelID="1001",ChannelURL="udp://239.1.1.1:1234".timeExtra
+ChannelURL="http://media.example.com/path/stream.m3u8",ChannelName="BBC",UserChannelID="2002"
+ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="3003"'></textarea>
+    <small class="hint">工具会按每行解析 key="value" 形式的字段（例如 ChannelName、UserChannelID、ChannelURL）。当找不到 ChannelName 或 ChannelURL 时该行会被跳过。</small>
+  </div>
 
-  // 更稳健的正则：匹配 ChannelName, UserChannelID, ChannelURL="protocol://rest"
-  // 能容忍空格、不同顺序中常见的逗号空白等
-  const lineRegex = /ChannelName\s*=\s*"([^"]+)"\s*,\s*UserChannelID\s*=\s*"([^"]+)"\s*,\s*ChannelURL\s*=\s*"([^:"]+):\/\/([^"]+)"/gi;
+  <div class="container">
+    <label for="proxyAddr">2. udpxy / 代理地址（host:port，可用主机名或 IP）：</label>
+    <input type="text" id="proxyAddr" value="192.168.1.100:4022" placeholder="例如 192.168.1.100:4022 或 proxy.local:4022">
+    <div class="meta">默认对于 <code>udp://</code> 协议会生成 <code>http://&lt;proxy&gt;/udp/&lt;multicast:port&gt;</code>；其它协议按规则保留或经代理路径转换。</div>
+  </div>
 
-  // 处理按钮
-  processBtn.addEventListener('click', () => {
-    const source = sourceText.value.trim();
-    const proxy = proxyAddr.value.trim() || DEFAULT_PROXY;
+  <div class="container row">
+    <button id="processBtn">执行转换</button>
+    <button id="copyBtn" class="ghost">复制结果</button>
+    <button id="clearBtn" class="ghost">清空并重置</button>
+    <button id="exampleBtn" class="ghost">插入示例</button>
+  </div>
 
-    if (!source) { alert('请先粘贴原始节目列表！'); return; }
+  <div class="container">
+    <label for="resultText">3. 处理后的 M3U 列表：</label>
+    <textarea id="resultText" readonly placeholder="点击 '执行转换' 后这里会显示转换结果..."></textarea>
+    <small class="hint">如果转换未匹配到任何条目，工具会提示并允许将原文以注释形式输出。</small>
+  </div>
 
-    // 放宽 proxy 校验：允许 IPv4/hostname（含点/字母）和端口；简单校验即可
-    if (!/^[\w\.\-:]+:\d+$/.test(proxy)) {
-      alert('代理地址格式错误（需为 host:port，例如 192.168.1.100:4022 或 proxy.local:4022）！');
-      return;
+  <footer>如需更复杂的输出（带 tvg-id / tvg-name / group-title 等属性），告诉我具体想要的 M3U 属性模板，我可以直接改写输出格式。</footer>
+
+  <script>
+  (function(){
+    // 元素
+    const sourceText = document.getElementById('sourceText');
+    const proxyAddr = document.getElementById('proxyAddr');
+    const resultText = document.getElementById('resultText');
+    const processBtn = document.getElementById('processBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const exampleBtn = document.getElementById('exampleBtn');
+
+    const DEFAULT_PROXY = '192.168.1.100:4022';
+
+    // 将一行解析成键值对象：匹配 key="value" 的所有项
+    function parseLineToKV(line) {
+      const re = /([\w\-]+)\s*=\s*"([^"]*)"/g;
+      const kv = {};
+      let m;
+      while ((m = re.exec(line)) !== null) {
+        const key = m[1].trim();
+        const val = m[2];
+        kv[key] = val;
+      }
+      return kv;
     }
 
-    // 使用回调替换，以便根据 protocol 动态生成 proxy URL
-    let replacedCount = 0;
-    const body = source.replace(lineRegex, (match, channelName, userId, protocol, rest) => {
-      replacedCount++;
-      // 根据协议生成代理路径（常见：udp -> /udp/<rest>）
-      const lowProto = protocol.toLowerCase();
-      let proxiedUrl;
-      if (lowProto === 'udp') {
-        // udpxy 常用格式： http://<proxy>/udp/<multicast-ip>:<port>
-        proxiedUrl = `http://${proxy}/udp/${rest}`;
-      } else if (lowProto === 'rtsp') {
-        // 假如想通过 proxy 转发 rtsp，可以用 /rtsp/ 占位（视你的代理实现）
-        proxiedUrl = `http://${proxy}/rtsp/${rest}`;
-      } else if (lowProto === 'http' || lowProto === 'https') {
-        // 对于已有 http(s) 链接，直接保留协议并把 host/path 拼上（或走 proxy 的相应路径）
-        proxiedUrl = `${protocol}://${rest}`;
-      } else {
-        // 其他协议，保守处理：把原始 rest 放到 proxy 的通用路径下
-        proxiedUrl = `http://${proxy}/${lowProto}/${rest}`;
+    // 生成最终代理化/原样 URL
+    function makeProxiedUrl(rawUrl, proxyHostPort) {
+      // rawUrl 可能像 "udp://239.1.1.1:1234" 或 "http://..." 或 "rtsp://..."
+      try {
+        // 尝试用 URL 解析（对非 http(s) 也能得到 protocol + rest）
+        // 为了兼容 rtsp/udp 等，先用 regex 如果 URL 构造失败
+        const protoMatch = rawUrl.match(/^([^:]+):\/\/(.+)$/);
+        if (!protoMatch) {
+          // 无协议 -> 直接返回原串
+          return rawUrl;
+        }
+        const proto = protoMatch[1].toLowerCase();
+        const rest = protoMatch[2];
+
+        if (proto === 'udp') {
+          // udpxy 常见路径： http://<proxy>/udp/<multicast-ip>:<port>
+          return `http://${proxyHostPort}/udp/${rest}`;
+        } else if (proto === 'rtsp') {
+          // rtsp 可能需要代理或特殊处理，默认走 proxy 下的 rtsp 路径（请根据你的代理调整）
+          return `http://${proxyHostPort}/rtsp/${rest}`;
+        } else if (proto === 'http' || proto === 'https') {
+          // http/https 保持原样（通常不需要通过 udpxy）
+          return rawUrl;
+        } else {
+          // 其它协议保守处理：放到 proxy 的通用路径下
+          return `http://${proxyHostPort}/${proto}/${rest}`;
+        }
+      } catch (e) {
+        return rawUrl;
+      }
+    }
+
+    // 主处理函数（逐行解析）
+    function processSource(source, proxy) {
+      const lines = source.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      const outEntries = [];
+      let processedCount = 0;
+
+      for (const line of lines) {
+        const kv = parseLineToKV(line);
+
+        // 容错：尝试兼容历史可能的命名（如 xxxChannelName）
+        const channelName = kv.ChannelName || kv.ChannelNAme || kv.channelName || kv.Channel || kv.xxxChannelName || '';
+        const userId = kv.UserChannelID || kv.userChannelID || kv.UserChannel || kv.ChannelID || '';
+        let channelUrl = kv.ChannelURL || kv.ChannelUrl || kv.channelURL || kv.URL || '';
+
+        // 有些行可能把 URL 放在其它字段或后缀中，尝试粗略抽取 "proto://rest" 的部分
+        if (!channelUrl) {
+          const urlMatch = line.match(/([a-zA-Z0-9]+):\/\/[^\s,"]+/);
+          if (urlMatch) channelUrl = urlMatch[0];
+        }
+
+        if (!channelUrl) {
+          // 无法找到 URL，跳过
+          continue;
+        }
+        if (!channelName) {
+          // 若缺少频道名，用 URL 作为名称备选（去掉协议）
+          const fallbackName = channelUrl.replace(/^[a-zA-Z0-9]+:\/\//, '');
+          // 取到第一段作为名（避免过长）
+          kv._fallbackName = fallbackName.split(/[\/:\?]/)[0] || fallbackName;
+        }
+
+        const finalName = channelName || kv._fallbackName || 'UnnamedChannel';
+        const proxied = makeProxiedUrl(channelUrl, proxy);
+
+        // 输出带 tvg-id 的 EXTINF（若有 UserChannelID）
+        if (userId) {
+          outEntries.push(`#EXTINF:-1 tvg-id="${userId}" tvg-name="${finalName}",${finalName}`);
+        } else {
+          outEntries.push(`#EXTINF:-1,${finalName}`);
+        }
+        outEntries.push(proxied);
+        processedCount++;
       }
 
-      // 生成一条 M3U 条目
-      // 我只把频道名写入 EXTINF（也可以带更多属性）
-      return `#EXTINF:-1,${channelName}\n${proxiedUrl}`;
+      return { processedCount, m3u: '#EXTM3U\n' + outEntries.join('\n') + (outEntries.length ? '\n' : '') };
+    }
+
+    // 按钮事件
+    processBtn.addEventListener('click', () => {
+      const source = sourceText.value.trim();
+      const proxy = (proxyAddr.value.trim() || DEFAULT_PROXY).trim();
+
+      if (!source) { alert('请先粘贴原始节目列表！'); return; }
+      if (!/^[\w.\-]+:\d+$/.test(proxy)) {
+        alert('代理地址格式错误（请使用 host:port，例如 192.168.1.100:4022 或 proxy.local:4022）');
+        return;
+      }
+
+      const res = processSource(source, proxy);
+      if (res.processedCount === 0) {
+        const ok = confirm('未匹配到任何频道条目。是否将原始内容以注释形式输出为 M3U（取消则结果置空）？');
+        if (ok) {
+          resultText.value = '#EXTM3U\n' + source.split(/\r?\n/).map(l => '# ' + l).join('\n') + '\n';
+        } else {
+          resultText.value = '';
+        }
+        return;
+      }
+
+      resultText.value = res.m3u;
+      alert(`转换完成：共处理 ${res.processedCount} 个条目。`);
     });
 
-    if (replacedCount === 0) {
-      // 没有替换到任何条目：提示并把原文输出（或只输出空）
-      if (!confirm('没有匹配到任何频道条目。是否将原始内容输出为注释？(点击取消将保留结果为空)')) {
-        resultText.value = '';
-        return;
+    // 复制（优先 navigator.clipboard，次级回退 execCommand）
+    copyBtn.addEventListener('click', async () => {
+      const text = resultText.value;
+      if (!text) { alert('暂无转换结果可复制！'); return; }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          alert('结果已复制到剪贴板（现代 API）！');
+          return;
+        } catch (err) {
+          // 继续回退
+        }
       }
-      resultText.value = '#EXTM3U\n' + source;
-      return;
-    }
 
-    // 构造最终 M3U，去重连续多余换行
-    const finalM3U = '#EXTM3U\n' + body.trim().replace(/\n{2,}/g, '\n');
-    resultText.value = finalM3U;
-    alert(`转换完成，共处理 ${replacedCount} 个条目。`);
-  });
-
-  // 复制结果：优先 navigator.clipboard，其次回退到 textarea 选中复制
-  copyBtn.addEventListener('click', async () => {
-    const result = resultText.value.trim();
-    if (!result) { alert('暂无转换结果可复制！'); return; }
-
-    // 尝试 modern API
-    if (navigator.clipboard && navigator.clipboard.writeText) {
       try {
-        await navigator.clipboard.writeText(result);
-        alert('结果已复制到剪贴板（navigator.clipboard）！');
-        return;
-      } catch (err) {
-        // 继续到回退方式
+        resultText.removeAttribute('readonly');
+        resultText.select();
+        resultText.setSelectionRange(0, resultText.value.length);
+        const ok = document.execCommand('copy');
+        resultText.setAttribute('readonly', 'readonly');
+        if (ok) {
+          alert('结果已复制到剪贴板（回退方式）！');
+        } else {
+          throw new Error('execCommand 返回 false');
+        }
+      } catch (e) {
+        alert('复制失败，请手动选中文本并复制。');
       }
-    }
+    });
 
-    // 回退方式：临时选中 textarea，执行 execCommand
-    try {
-      resultText.removeAttribute('readonly'); // 允许选中
-      resultText.select();
-      resultText.setSelectionRange(0, resultText.value.length);
-      const ok = document.execCommand('copy');
-      resultText.setAttribute('readonly', 'readonly');
-      if (ok) {
-        alert('结果已复制到剪贴板（回退方式）！');
-      } else {
-        throw new Error('execCommand copy 返回 false');
-      }
-    } catch (err) {
-      alert('复制失败，请手动选中并复制。');
-    }
-  });
+    // 清空重置
+    clearBtn.addEventListener('click', () => {
+      if (!confirm('确定要清空并重置为默认代理吗？')) return;
+      sourceText.value = '';
+      resultText.value = '';
+      proxyAddr.value = DEFAULT_PROXY;
+      alert('已清空并重置代理。');
+    });
 
-  // 清空：重置到默认 proxy
-  clearBtn.addEventListener('click', () => {
-    sourceText.value = '';
-    resultText.value = '';
-    proxyAddr.value = DEFAULT_PROXY;
-    alert('已清空所有内容并重置代理地址！');
-  });
-</script>
+    // 插入示例
+    exampleBtn.addEventListener('click', () => {
+      sourceText.value = [
+        'ChannelName="CCTV1",UserChannelID="1001",ChannelURL="udp://239.1.1.1:1234".timexxx',
+        'ChannelURL="http://media.example.com/path/stream.m3u8",ChannelName="BBC",UserChannelID="2002"',
+        'ChannelName="MyRTSP", ChannelURL="rtsp://192.168.2.50/stream", UserChannelID="3003"',
+        'xxxChannelName="WRONG",UserChannelID="4004",SomeField="no url here"'
+      ].join('\\n');
+      alert('示例已插入，点击 "执行转换" 查看效果。');
+    });
+
+    // 页面加载时可选地填入示例（不自动插入）
+  })();
+  </script>
+</body>
+</html>
